@@ -1,0 +1,9 @@
+[package]
+name = "group_D"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+rand = "0.8"
+base64 = "0.21"
