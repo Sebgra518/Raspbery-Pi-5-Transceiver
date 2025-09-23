@@ -55,5 +55,21 @@ cargo build --release
 ### 4. Run the transceiver
 
 On both Pis (or two terminals):
+```bash
+python3 Sender.py
+python3 Receiver.py
+```
 
-python3 transceiver.py
+---
+
+###Flow
+```bash
+[Camera + Mic] --(Python Capture)--> [Rust Encryption] --LAN--> [Rust Decryption] --(Python Playback)--> [Screen + Speaker]
+```
+
+-Video captured from Pi Camera Module 2
+-Audio captured from USB microphone
+-Encrypted in Rust using Pi 5’s hardware crypto engine
+-Transmitted over LAN
+-Received, decrypted, and rendered live
+
