@@ -74,4 +74,5 @@ python3 Receiver.py
 -Received, decrypted, and rendered live
 
 ## Performance Analysis
-For details on performance, including CPI and power consumption benchmarks (crypto engine vs software-only), see the [full report](docs/FINAL PRESENTATION (LAN Video_Audio Transceiver).pdf).
+For details on performance, including CPI and power consumption benchmarks (crypto engine vs software-only), see the [full report](docs/performance-analysis.pdf).
+
