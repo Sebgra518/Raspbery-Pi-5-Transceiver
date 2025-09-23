@@ -2,8 +2,6 @@
 
 Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspberry Pi 5 with **Python control logic** and **Rust-based encryption** that leverages the Pi 5’s hardware crypto engine.  
 
-> 💡 Imagine a DIY **encrypted doorbell camera**: video from a Pi Camera Module 2 and audio from a USB microphone, streamed live with end-to-end encryption.
-
 ---
 
 ## Features
