@@ -73,3 +73,5 @@ python3 Receiver.py
 -Transmitted over LAN
 -Received, decrypted, and rendered live
 
+## Performance Analysis
+For details on performance, including CPI and power consumption benchmarks (crypto engine vs software-only), see the [full report](docs/performance-analysis.pdf).
