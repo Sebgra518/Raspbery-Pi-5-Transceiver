@@ -37,3 +37,23 @@ Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspber
 ```bash
 git clone https://github.com/Sebgra518/Raspbery-Pi-5-Transceiver.git
 cd Raspbery-Pi-5-Transceiver
+```
+
+### 2. Install Python dependencies
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Install Rust dependencies
+```bash
+cd rust-encryption
+cargo build --release
+```
+
+### 4. Run the transceiver
+
+On both Pis (or two terminals):
+
+python3 transceiver.py
