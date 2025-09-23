@@ -76,3 +76,5 @@ python3 Receiver.py
 ## Performance Analysis
 For details on performance, including CPI and power consumption benchmarks (crypto engine vs software-only), see the [full report](docs/performance-analysis.pdf).
 
+![Power consumption comparison](docs/EncryptionTime(CE OFF).jpg)
+![Power consumption comparison](docs/EncryptionTime(CE ON).jpg)
