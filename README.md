@@ -62,7 +62,7 @@ python3 Receiver.py
 
 ---
 
-###Flow
+### System Diagram
 ```bash
 [Camera + Mic] --(Python Capture)--> [Rust Encryption] --LAN--> [Rust Decryption] --(Python Playback)--> [Screen + Speaker]
 ```
