@@ -6,23 +6,17 @@ Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspber
 
 ---
 
-## 🎥 Demo
-<!-- Replace with a GIF or YouTube thumbnail link -->
-[![Watch Demo](https://img.youtube.com/vi/YOUR_VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+## Features
+- **Bidirectional live streaming** of video (Pi Camera Module 2) and audio (USB microphone)  
+- **End-to-end encryption** implemented in Rust for security + performance  
+- Uses the Raspberry Pi 5 **crypto engine** for efficient, low-latency encryption  
+- **Python control logic** for stream orchestration  
+- Configurable **bitrate and resolution** (roadmap: move to `.env` for user control)  
+- LAN-based for private, secure use cases (doorbell cameras, local surveillance, secure comms)  
 
 ---
 
-## ✨ Features
-- 📹 **Bidirectional live streaming** of video (Pi Camera Module 2) and audio (USB microphone)  
-- 🔐 **End-to-end encryption** implemented in Rust for security + performance  
-- ⚡ Uses the Raspberry Pi 5 **crypto engine** for efficient, low-latency encryption  
-- 🐍 **Python control logic** for stream orchestration  
-- ⚙️ Configurable **bitrate and resolution** (roadmap: move to `.env` for user control)  
-- 🌐 LAN-based for private, secure use cases (doorbell cameras, local surveillance, secure comms)  
-
----
-
-## 🖥️ Hardware
+## Hardware
 - Raspberry Pi 5 (16 GB)  
 - Pi Camera Module 2  
 - USB Microphone  
@@ -30,7 +24,7 @@ Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspber
 
 ---
 
-## 🛠️ Software Stack
+## Software Stack
 - **Python**: Orchestration, device control, streaming pipeline  
 - **Rust**: Encryption logic (no garbage collection → lower latency, predictable performance)  
 - **Dependencies**:  
@@ -39,7 +33,7 @@ Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspber
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Clone repo
 ```bash
