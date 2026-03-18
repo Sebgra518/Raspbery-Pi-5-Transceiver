@@ -1,9 +1,13 @@
 [package]
-name = "group_D"
+name = "crypto_worker"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-openssl = { version = "0.10", features = ["vendored"] }
+openssl = "0.10"
+aes-gcm = "0.10"
+aead = "0.5"
 rand = "0.8"
-base64 = "0.21"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+anyhow = "1"

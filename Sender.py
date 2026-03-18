@@ -1,144 +1,115 @@
-import cv2
-import subprocess
-import time
 import socket
-import struct
-from picamera2 import Picamera2
-import base64
-import json
-import os
-import pyaudio
 import threading
+import cv2
+import pyaudio
+from picamera2 import Picamera2
 
-# Audio sending thread
-def audio_sender(sock_audio, ip, port, stream, chunk, proc):
-    while True:
-        try:
-            audio_data = stream.read(chunk, exception_on_overflow=False)
-        except IOError:
-            print("Audio buffer overflowed, sending silence")
-            audio_data = b'\x00' * chunk  # Silence
+from rust_crypto import RustCryptoWorker
 
-        try:
-            # Encrypt audio data using same subprocess
-            start = time.time()
-            length = struct.pack(">I", len(audio_data))
-            proc.stdin.write(length + audio_data)
-            proc.stdin.flush()
-            audio_encrypt_duration = time.time() - start
-        
-            #append to "video Encryption Time"
-            with open("Audio Encryption Time.txt", "a") as f:
-                f.write(f"{audio_encrypt_duration:.6f}\n")
+DEST_IP = "192.168.254.165"
+VIDEO_PORT = 5005
+AUDIO_PORT = 5004
+KEY_HEX = "3031323334353637383941424344454630313233343536373839414243444546"
 
-            output = json.loads(proc.stdout.readline())
-            encrypted_audio = base64.b64decode(output["data"])
+RUST_EXE = "./target/release/crypto_worker"
 
-            # Optional: send key + iv if needed by receiver
-            key = base64.b64decode(output["key"])
-            iv = base64.b64decode(output["iv"])
+USE_HW_CRYPTO = True
 
-            sock_audio.sendto(key, (ip, port))
-            sock_audio.sendto(iv, (ip, port))
-            sock_audio.sendto(struct.pack("!I", len(encrypted_audio)), (ip, port))
-            sock_audio.sendto(encrypted_audio, (ip, port))
+# Leave None to let OpenSSL auto-detect.
+# For experiments, you can set a string here.
+OPENSSL_ARMCAP = None
 
-        except Exception as e:
-            print(f"Audio encryption/send error: {e}")
+def make_backend():
+    return "openssl" if USE_HW_CRYPTO else "rustcrypto"
+
+def make_armcap():
+    # Only pass through if you really want to override OpenSSL behavior.
+    return OPENSSL_ARMCAP if USE_HW_CRYPTO else None
+
+def audio_sender(sock_audio, worker, stop_event):
+    p = pyaudio.PyAudio()
+
+    stream = p.open(
+        format=pyaudio.paInt16,
+        channels=1,
+        rate=48000,
+        input=True,
+        frames_per_buffer=1024,
+    )
+
+    frame_id = 0
+    try:
+        while not stop_event.is_set():
+            audio_data = stream.read(1024, exception_on_overflow=False)
+            packets = worker.encrypt_to_packets(frame_id, audio_data)
+            for pkt in packets:
+                sock_audio.sendto(pkt, (DEST_IP, AUDIO_PORT))
+            frame_id = (frame_id + 1) & 0xFFFFFFFF
+    finally:
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
 
 def main():
-    #UDP_IP = "192.168.254.82"  # Home PC IP
-    #UDP_IP = "192.168.254.160"  # Laptop Home IP
-    #UDP_IP = "172.20.10.2"  # Laptop Out IP
-    #UDP_IP = "172.20.10.6"  # Chris TEMP IP
-    UDP_IP = "192.168.254.165"  # Home self IP
-    UDP_PORT_VIDEO = 5005
-    UDP_PORT_AUDIO = 5004
-
     sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    CHUNK = 16384  # 4096 samples * 2 bytes/sample = 8192 bytes
-    CHUNK_SIZE = 64000 - 16  # For video encryption chunks
-
-    #Open audio Stream
-    p = pyaudio.PyAudio()
-
-    #PRINT DEVICE AND SUPPORTED SAMPLE RATE
-    for i in range(p.get_device_count()):
-        info = p.get_device_info_by_index(i)
-        if info['maxInputChannels'] > 0:
-            print(f"Input Device ID {i} - {info['name']}")
-            print(f"\tDefault Sample Rate: {info['defaultSampleRate']}")
-
-    stream = p.open(format=pyaudio.paInt16,
-                    channels=1,
-                    rate=48000,
-                    input=True,
-                    input_device_index=1,
-                    frames_per_buffer=CHUNK)
-
-    #Turn crypto engine on/off (0 = on | 1 = off)
-    env = os.environ.copy()
-    env["OPENSSL_armcap"] = "1"
-
-    #Open Rust Subprocess and pip I/O
-    proc = subprocess.Popen(
-        ["./target/release/ECE4301Final"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=env
+    video_worker = RustCryptoWorker(
+        exe_path=RUST_EXE,
+        stream="video",
+        backend=make_backend(),
+        key_hex=KEY_HEX,
+        armcap=make_armcap(),
     )
 
-    # Start audio thread
-    audio_thread = threading.Thread(
+    audio_worker = RustCryptoWorker(
+        exe_path=RUST_EXE,
+        stream="audio",
+        backend=make_backend(),
+        key_hex=KEY_HEX,
+        armcap=make_armcap(),
+    )
+
+    stop_event = threading.Event()
+    t = threading.Thread(
         target=audio_sender,
-        args=(sock_audio, UDP_IP, UDP_PORT_AUDIO, stream, CHUNK, proc),
-        daemon=True
+        args=(sock_audio, audio_worker, stop_event),
+        daemon=True,
     )
-    audio_thread.start()
+    t.start()
 
-    # Start camera
     picam2 = Picamera2()
-    picam2.preview_configuration.main.size = (584, 480)
-    picam2.preview_configuration.main.format = "RGB888"
+    cfg = picam2.create_video_configuration(
+        main={"size": (640, 480), "format": "RGB888"}
+    )
+    picam2.configure(cfg)
     picam2.start()
 
-    print("Sending video and audio...")
+    frame_id = 0
+    encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
 
-    while True:
-        frame = picam2.capture_array()
-        ret, frame_bytes = cv2.imencode('.jpg', frame)
-        if not ret:
-            continue
+    try:
+        while True:
+            frame = picam2.capture_array()
+            ok, jpg = cv2.imencode(".jpg", frame, encode_params)
+            if not ok:
+                continue
 
-        frame_data = frame_bytes.tobytes()
-        length = struct.pack(">I", len(frame_data))
+            packets = video_worker.encrypt_to_packets(frame_id, jpg.tobytes())
+            for pkt in packets:
+                sock_video.sendto(pkt, (DEST_IP, VIDEO_PORT))
 
-        #Encrypt
-        startTime = time.time()
-        proc.stdin.write(length + frame_data)
-        proc.stdin.flush()
-        output = json.loads(proc.stdout.readline())
-        video_encrypt_duration = time.time() - startTime
+            frame_id = (frame_id + 1) & 0xFFFFFFFF
 
-        #append to "video Encryption Time"
-        with open("Video Encryption Time.txt", "a") as f:
-            f.write(f"{video_encrypt_duration:.6f}\n")
-
-        key = base64.b64decode(output["key"])
-        iv = base64.b64decode(output["iv"])
-        encrypted_frame = base64.b64decode(output["data"])
-        frame_size = len(encrypted_frame)
-
-        sock_video.sendto(key, (UDP_IP, UDP_PORT_VIDEO))
-        sock_video.sendto(iv, (UDP_IP, UDP_PORT_VIDEO))
-        sock_video.sendto(struct.pack("!I", frame_size), (UDP_IP, UDP_PORT_VIDEO))
-
-        for i in range(0, frame_size, CHUNK_SIZE):
-            chunk = encrypted_frame[i:i + CHUNK_SIZE]
-            sock_video.sendto(chunk, (UDP_IP, UDP_PORT_VIDEO))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_event.set()
+        picam2.stop()
+        video_worker.close()
+        audio_worker.close()
+        sock_video.close()
+        sock_audio.close()
 
 if __name__ == "__main__":
     main()

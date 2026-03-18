@@ -1,194 +1,145 @@
+import argparse
+import json
 import socket
 import struct
-import numpy as np
-import cv2
-import threading
-from Cryptodome.Cipher import AES
-from Cryptodome.Util.Padding import unpad
-import pyaudio
 import time
+import threading
 
-UDP_IP = "0.0.0.0"
-UDP_PORT_VIDEO = 5005
-UDP_PORT_AUDIO = 5004
+import cv2
+import numpy as np
+import pyaudio
+from Cryptodome.Cipher import AES
 
-# Global video variables
-video_key = None
-video_iv = None
-video_frame_size = None
-video_buffer = b""
+VERSION = 1
+STREAM_VIDEO = 1
+STREAM_AUDIO = 2
 
-# Set up video socket
-sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_video.bind((UDP_IP, UDP_PORT_VIDEO))
+HEADER_FORMAT = "!BBIHHQ12s"
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
-# Set up audio socket
-sock_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock_audio.bind((UDP_IP, UDP_PORT_AUDIO))
+def decrypt_chunk(key: bytes, nonce: bytes, ciphertext_and_tag: bytes, aad: bytes) -> bytes:
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    cipher.update(aad)
+    ciphertext = ciphertext_and_tag[:-16]
+    tag = ciphertext_and_tag[-16:]
+    return cipher.decrypt_and_verify(ciphertext, tag)
 
-# Set up audio stream
-p = pyaudio.PyAudio()
-FORMAT = pyaudio.paInt16
-CHANNELS = 2
-RATE = 48000
-CHUNK = 16384
+class Reassembly:
+    def __init__(self, timeout=300):
+        self.frames = {}
+        self.timeout = timeout
 
-#PRINT DEVICE AND SUPPORTED SAMPLE RATE
-for i in range(p.get_device_count()):
-    info = p.get_device_info_by_index(i)
-    if info['maxInputChannels'] > 0:
-        print(f"Input Device ID {i} - {info['name']}")
-        print(f"\tDefault Sample Rate: {info['defaultSampleRate']}")
+    def add(self, frame_id, idx, total, payload):
+        now = time.monotonic_ns() // 1_000_000
 
-stream = p.open(format=FORMAT,
-                channels=CHANNELS,
-                rate=RATE,
-                output=True,
-                frames_per_buffer=CHUNK)
+        if frame_id not in self.frames:
+            self.frames[frame_id] = {
+                "chunks": {},
+                "total": total,
+                "time": now
+            }
 
-def receive_video():
-    global video_buffer, video_frame_size, video_key, video_iv
-    while True:
-        try:
-            data, _ = sock_video.recvfrom(65536)
+        f = self.frames[frame_id]
+        f["chunks"][idx] = payload
 
-            if len(data) == 32:
-                video_key = data
-                video_buffer = b""
-                video_frame_size = None
-                continue
+        if len(f["chunks"]) == f["total"]:
+            data = b''.join(f["chunks"][i] for i in range(total))
+            del self.frames[frame_id]
+            return data
 
-            if len(data) == 16:
-                video_iv = data
-                video_buffer = b""
-                video_frame_size = None
-                continue
+        # cleanup
+        for k in list(self.frames.keys()):
+            if now - self.frames[k]["time"] > self.timeout:
+                del self.frames[k]
 
-            if len(data) == 4:
-                video_frame_size = struct.unpack("!I", data)[0]
-                video_buffer = b""
-                continue
+        return None
 
-            video_buffer += data
+def load_config(args):
+    config = {}
+    if args.config:
+        with open(args.config) as f:
+            config = json.load(f)
 
-            if video_frame_size and len(video_buffer) >= video_frame_size and video_key and video_iv:
-                encrypted_bytes = video_buffer[:video_frame_size]
-                try:
-                    encrypted_array = np.frombuffer(encrypted_bytes, dtype=np.uint8)
-                    side_length = int(np.sqrt(len(encrypted_array) / 3))
-                    if side_length > 0:
-                        encrypted_array = encrypted_array[:side_length * side_length * 3]
-                        encrypted_image = encrypted_array.reshape((side_length, side_length, 3))
-                        cv2.imshow('Encrypted Stream', encrypted_image)
-                except Exception as e:
-                    print(f"Encrypted image error: {e}")
+    def get(name, default):
+        return getattr(args, name) if getattr(args, name) else config.get(name, default)
 
-                try:
-                    start = time.time()
-                    cipher = AES.new(video_key, AES.MODE_CBC, video_iv)
-                    decrypted_data = unpad(cipher.decrypt(encrypted_bytes), AES.block_size)
+    key = bytes.fromhex(get("key_hex", None))
+    return {
+        "video_port": get("video_port", 5005),
+        "audio_port": get("audio_port", 5004),
+        "key": key
+    }
 
-                    eoi_index = decrypted_data.find(b'\xFF\xD9')
-                    if eoi_index != -1:
-                        jpeg_data = decrypted_data[:eoi_index + 2]
-                        img_array = np.frombuffer(jpeg_data, dtype=np.uint8)
-                        frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                        
-                        video_encrypt_duration = time.time() - start
-        
-                        #append to "video Encryption Time"
-                        with open("Video Decryption Time.txt", "a") as f:
-                            f.write(f"{video_encrypt_duration:.6f}\n")
+def video_thread(cfg):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", cfg["video_port"]))
 
-                        if frame is not None:
-                            cv2.imshow("Received Frame", frame)
-                            if cv2.waitKey(1) & 0xFF == ord('q'):
-                                break
-                except Exception as e:
-                    print(f"Decryption/display error: {e}")
-
-                video_buffer = b""
-                video_frame_size = None
-
-        except Exception as e:
-            print(f"Video thread error: {e}")
-            video_buffer = b""
-            video_frame_size = None
-
-def receive_audio():
-    audio_key = None
-    audio_iv = None
-    audio_size = None
-    audio_buffer = b""
+    r = Reassembly()
 
     while True:
+        pkt, _ = sock.recvfrom(2048)
+
+        header = pkt[:HEADER_SIZE]
+        body = pkt[HEADER_SIZE:]
+
         try:
-            data, _ = sock_audio.recvfrom(65536)
-
-            if len(data) == 32:
-                audio_key = data
-                audio_buffer = b""
+            v, t, fid, idx, total, ts, nonce = struct.unpack(HEADER_FORMAT, header)
+            if t != STREAM_VIDEO:
                 continue
 
-            if len(data) == 16:
-                audio_iv = data
-                audio_buffer = b""
+            plain = decrypt_chunk(cfg["key"], nonce, body, header)
+
+            frame = r.add(fid, idx, total, plain)
+            if frame:
+                img = cv2.imdecode(np.frombuffer(frame, np.uint8), 1)
+                if img is not None:
+                    cv2.imshow("Video", img)
+                    cv2.waitKey(1)
+        except:
+            pass
+
+def audio_thread(cfg):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", cfg["audio_port"]))
+
+    p = pyaudio.PyAudio()
+    stream = p.open(format=pyaudio.paInt16, channels=1, rate=48000, output=True)
+
+    r = Reassembly()
+
+    while True:
+        pkt, _ = sock.recvfrom(2048)
+        header = pkt[:HEADER_SIZE]
+        body = pkt[HEADER_SIZE:]
+
+        try:
+            v, t, fid, idx, total, ts, nonce = struct.unpack(HEADER_FORMAT, header)
+            if t != STREAM_AUDIO:
                 continue
 
-            if len(data) == 4:
-                audio_size = struct.unpack("!I", data)[0]
-                audio_buffer = b""
-                continue
+            plain = decrypt_chunk(cfg["key"], nonce, body, header)
 
-            audio_buffer += data
+            audio = r.add(fid, idx, total, plain)
+            if audio:
+                stream.write(audio)
+        except:
+            pass
 
-            if audio_key and audio_iv and audio_size and len(audio_buffer) >= audio_size:
-                encrypted_audio = audio_buffer[:audio_size]
-                try:
-                    start = time.time()
-                    cipher = AES.new(audio_key, AES.MODE_CBC, audio_iv)
-                    decrypted_audio = unpad(cipher.decrypt(encrypted_audio), AES.block_size)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config")
+    parser.add_argument("--video-port", type=int)
+    parser.add_argument("--audio-port", type=int)
+    parser.add_argument("--key-hex", required=True)
 
-                    audio_encrypt_duration = time.time() - start
-        
-                    #append to "audio Encryption Time"
-                    with open("Audio Decryption Time.txt", "a") as f:
-                        f.write(f"{audio_encrypt_duration:.6f}\n")
+    args = parser.parse_args()
+    cfg = load_config(args)
 
-                    # Convert decrypted audio to int16 numpy array
-                    audio_np = np.frombuffer(decrypted_audio, dtype=np.int16)
+    threading.Thread(target=video_thread, args=(cfg,), daemon=True).start()
+    threading.Thread(target=audio_thread, args=(cfg,), daemon=True).start()
 
-                    # Apply gain
-                    gain = 2.0  # Increase as needed, e.g., 2.0 = double volume
-                    amplified_np = np.clip(audio_np * gain, -32768, 32767).astype(np.int16)
+    while True:
+        time.sleep(1)
 
-                    # Convert back to bytes
-                    amplified_audio = amplified_np.tobytes()
-
-                    # Interleave: Left = encrypted, Right = decrypted (amplified)
-                    stereo_audio = b''.join([
-                        encrypted_audio[i:i+2] + amplified_audio[i:i+2]
-                        for i in range(0, min(len(encrypted_audio), len(amplified_audio)), 2)
-                    ])
-
-                    stream.write(stereo_audio)
-                except Exception as e:
-                    print(f"Audio decryption error: {e}")
-
-                audio_key = None
-                audio_iv = None
-                audio_size = None
-                audio_buffer = b""
-
-        except Exception as e:
-            print(f"Audio thread error: {e}")
-
-# Start threads
-video_thread = threading.Thread(target=receive_video, daemon=True)
-audio_thread = threading.Thread(target=receive_audio, daemon=True)
-
-video_thread.start()
-audio_thread.start()
-
-# Keep main thread alive
-video_thread.join()
+if __name__ == "__main__":
+    main()
