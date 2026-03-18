@@ -2,7 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use openssl::symm::{encrypt_aead, Cipher};
 use rand::RngCore;
@@ -145,17 +145,27 @@ fn encrypt_openssl(key: &[u8], nonce: &[u8; 12], aad: &[u8], plaintext: &[u8]) -
     Ok(out)
 }
 
-fn encrypt_rustcrypto(key: &[u8], nonce: &[u8; 12], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new_from_slice(key)?;
+fn encrypt_rustcrypto(
+    key: &[u8],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| anyhow!("aes-gcm key init failed: {:?}", e))?;
+
     let nonce = Nonce::from_slice(nonce);
 
-    let out = cipher.encrypt(
-        nonce,
-        Payload {
-            msg: plaintext,
-            aad,
-        },
-    )?;
+    let out = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|e| anyhow!("aes-gcm encrypt failed: {:?}", e))?;
+
     Ok(out)
 }
 
