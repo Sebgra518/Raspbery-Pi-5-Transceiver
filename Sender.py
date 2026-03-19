@@ -34,6 +34,8 @@ AUDIO_INPUT_DEVICE_INDEX = int(os.getenv("AUDIO_INPUT_DEVICE", 0))
 
 SOCKET_BUFFER_SIZE = int(os.getenv("SOCKET_BUFFER", 1024 * 1024))
 
+CRYPTO_MODE = os.getenv("CRYPTO_MODE", "auto").strip().lower()
+CRYPTO_ARM_CAP = os.getenv("CRYPTO_ARM_CAP", "").strip()
 
 def now_ms() -> int:
     return int(time.monotonic_ns() // 1_000_000)
@@ -47,10 +49,30 @@ def build_header(stream_type: int, seq: int, ts_ms: int, nonce: bytes, ct_len: i
         struct.pack("!I", ct_len)
     )
 
+def build_encryptor_env():
+    env = os.environ.copy()
+
+    if CRYPTO_MODE == "auto":
+        env.pop("OPENSSL_armcap", None)
+        print("Crypto mode: auto (OpenSSL runtime detection)")
+    elif CRYPTO_MODE == "off":
+        env["OPENSSL_armcap"] = "0"
+        print("Crypto mode: off (OPENSSL_armcap=0)")
+    elif CRYPTO_MODE == "custom":
+        if not CRYPTO_ARM_CAP:
+            raise ValueError("CRYPTO_MODE=custom requires CRYPTO_ARM_CAP")
+        env["OPENSSL_armcap"] = CRYPTO_ARM_CAP
+        print(f"Crypto mode: custom (OPENSSL_armcap={CRYPTO_ARM_CAP})")
+    else:
+        raise ValueError("CRYPTO_MODE must be auto, off, or custom")
+
+    return env
+
 
 class RustEncryptor:
-    def __init__(self, exe_path: str):
+    def __init__(self, exe_path: str, env=None):
         self.exe_path = exe_path
+        self.env = env
         self.lock = threading.Lock()
         self.proc = self._start_proc()
 
@@ -61,6 +83,7 @@ class RustEncryptor:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            env=self.env,
         )
 
     def _read_exact(self, n: int) -> bytes:
@@ -187,6 +210,8 @@ def main():
 
     sock_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
     sock_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SOCKET_BUFFER_SIZE)
+
+    encryptor_env = build_encryptor_env()
 
     enc_video = RustEncryptor("./target/release/udp_av_encryptor")
     enc_audio = RustEncryptor("./target/release/udp_av_encryptor")

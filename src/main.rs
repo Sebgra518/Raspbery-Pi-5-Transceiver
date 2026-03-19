@@ -3,12 +3,16 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use std::fs;
 use std::io::{self, Read, Write};
 
-fn aes_gcm_encrypt(
-    key: &[u8],
-    nonce: &[u8; 12],
-    aad: &[u8],
-    plaintext: &[u8],
-) -> Result<Vec<u8>> {
+
+/*
+Encyrption:
+    // 12-byte GCM nonce:
+    // 1 byte stream type
+    // 3 bytes reserved
+    // 8 bytes monotonically increasing counter
+*/
+
+fn aes_gcm_encrypt(key: &[u8],nonce: &[u8; 12],aad: &[u8],plaintext: &[u8],) -> Result<Vec<u8>> {
     let cipher = Cipher::aes_256_gcm();
     let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(nonce))
         .context("create crypter")?;
@@ -31,15 +35,12 @@ fn aes_gcm_encrypt(
 }
 
 fn build_nonce(counter: u64, stream_type: u8) -> [u8; 12] {
-    // 12-byte GCM nonce:
-    // 1 byte stream type
-    // 3 bytes reserved
-    // 8 bytes monotonically increasing counter
     let mut nonce = [0u8; 12];
     nonce[0] = stream_type;
     nonce[4..12].copy_from_slice(&counter.to_be_bytes());
     nonce
 }
+
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>> {
     if s.len() != 64 {
         bail!("Key must be 64 hex chars (32 bytes)");
