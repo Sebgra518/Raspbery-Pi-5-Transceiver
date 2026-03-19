@@ -19,9 +19,10 @@ STREAM_AUDIO = 1
 VIDEO_W = 640
 VIDEO_H = 480
 JPEG_QUALITY = 80
-AUDIO_RATE = 48000
+
+AUDIO_RATE = 44100
 AUDIO_CH = 1
-AUDIO_CHUNK = 1024  # samples
+AUDIO_CHUNK = 1024  # samples\
 
 def now_ms() -> int:
     return int(time.monotonic_ns() // 1_000_000)
@@ -40,9 +41,30 @@ class RustEncryptor:
             [exe_path],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             bufsize=0,
         )
         self.lock = threading.Lock()
+
+    def _read_exact(self, n: int) -> bytes:
+        chunks = []
+        total = 0
+        while total < n:
+            chunk = self.proc.stdout.read(n - total)
+            if not chunk:
+                rc = self.proc.poll()
+                err = b""
+                try:
+                    err = self.proc.stderr.read()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"encryptor stdout closed early "
+                    f"(wanted {n}, got {total}, returncode={rc}, stderr={err.decode(errors='replace')})"
+                )
+            chunks.append(chunk)
+            total += len(chunk)
+        return b"".join(chunks)
 
     def encrypt(self, stream_type: int, aad: bytes, payload: bytes):
         with self.lock:
@@ -53,26 +75,23 @@ class RustEncryptor:
             self.proc.stdin.write(payload)
             self.proc.stdin.flush()
 
-            nonce = self.proc.stdout.read(12)
-            if len(nonce) != 12:
-                raise RuntimeError("failed to read nonce from encryptor")
-
-            ct_len = struct.unpack("!I", self.proc.stdout.read(4))[0]
-            ciphertext = self.proc.stdout.read(ct_len)
-            if len(ciphertext) != ct_len:
-                raise RuntimeError("failed to read ciphertext from encryptor")
+            nonce = self._read_exact(12)
+            ct_len = struct.unpack("!I", self._read_exact(4))[0]
+            ciphertext = self._read_exact(ct_len)
 
             return nonce, ciphertext
 
 def audio_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
     pa = pyaudio.PyAudio()
+    
     stream = pa.open(
         format=pyaudio.paInt16,
         channels=AUDIO_CH,
         rate=AUDIO_RATE,
         input=True,
+        input_device_index=0,
         frames_per_buffer=AUDIO_CHUNK,
-    )
+    )   
 
     seq = 0
     while True:
