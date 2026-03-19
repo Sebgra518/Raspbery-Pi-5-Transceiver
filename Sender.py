@@ -6,27 +6,33 @@ import threading
 import time
 from picamera2 import Picamera2
 import pyaudio
+from dotenv import load_dotenv
+import os
 
-DEST_IP = "192.168.254.82"
-VIDEO_PORT = 5005
-AUDIO_PORT = 5004
+load_dotenv()
+
+DEST_IP = os.getenv("DEST_IP", "127.0.0.1")
+
+VIDEO_PORT = int(os.getenv("VIDEO_PORT", 5005))
+AUDIO_PORT = int(os.getenv("AUDIO_PORT", 5004))
+
 
 MAGIC = b"AV01"
 STREAM_VIDEO = 0
 STREAM_AUDIO = 1
 
-VIDEO_W = 640
-VIDEO_H = 480
-JPEG_QUALITY = 70
-VIDEO_FPS = 15
+VIDEO_W = int(os.getenv("VIDEO_WIDTH", 640))
+VIDEO_H = int(os.getenv("VIDEO_HEIGHT", 480))
+VIDEO_FPS = int(os.getenv("VIDEO_FPS", 15))
+JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", 70))
 MAX_UDP_PACKET = 65000
 
-AUDIO_RATE = 44100
-AUDIO_CH = 1
-AUDIO_CHUNK = 1024
-AUDIO_INPUT_DEVICE_INDEX = 0
+AUDIO_RATE = int(os.getenv("AUDIO_RATE", 44100))
+AUDIO_CH = int(os.getenv("AUDIO_CHANNELS", 1))
+AUDIO_CHUNK = int(os.getenv("AUDIO_CHUNK", 1024))
+AUDIO_INPUT_DEVICE_INDEX = int(os.getenv("AUDIO_INPUT_DEVICE", 0))
 
-SOCKET_BUFFER_SIZE = 1024 * 1024
+SOCKET_BUFFER_SIZE = int(os.getenv("SOCKET_BUFFER", 1024 * 1024))
 
 
 def now_ms() -> int:

@@ -9,17 +9,23 @@ import numpy as np
 import pyaudio
 from Cryptodome.Cipher import AES
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 BIND_IP = "0.0.0.0"
-VIDEO_PORT = 5005
-AUDIO_PORT = 5004
+
+VIDEO_PORT = int(os.getenv("VIDEO_PORT", 5005))
+AUDIO_PORT = int(os.getenv("AUDIO_PORT", 5004))
 
 MAGIC = b"AV01"
 STREAM_VIDEO = 0
 STREAM_AUDIO = 1
 
-AUDIO_RATE = 44100
-AUDIO_CH = 1
-AUDIO_SAMPLES_PER_PACKET = 1024
+AUDIO_RATE = int(os.getenv("AUDIO_RATE", 44100))
+AUDIO_CH = int(os.getenv("AUDIO_CHANNELS", 1))
+AUDIO_SAMPLES_PER_PACKET = int(os.getenv("AUDIO_CHUNK", 1024))
 AUDIO_BYTES_PER_SAMPLE = 2  # int16 mono
 AUDIO_PACKET_BYTES = AUDIO_SAMPLES_PER_PACKET * AUDIO_BYTES_PER_SAMPLE
 
@@ -27,9 +33,8 @@ AUDIO_QUEUE_PACKETS = 100
 AUDIO_PREFILL_PACKETS = 20
 AUDIO_OUTPUT_DEVICE_INDEX = None  # set to an integer if you want a specific device
 
-KEY = bytes.fromhex(
-    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-)
+KEY = bytes.fromhex(os.getenv("STREAM_KEY"))
+
 if len(KEY) != 32:
     raise RuntimeError("KEY must be 32 bytes for AES-256-GCM")
 
