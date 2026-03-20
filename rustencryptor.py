@@ -2,7 +2,6 @@ import struct
 import subprocess
 import threading
 
-
 class RustEncryptor:
     def __init__(self, exe_path: str, env=None):
         self.exe_path = exe_path

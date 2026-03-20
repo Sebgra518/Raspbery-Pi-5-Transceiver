@@ -7,8 +7,8 @@ from picamera2 import Picamera2
 import pyaudio
 from dotenv import load_dotenv
 import os
-import metrics_logger
-import RustEncryptor
+from metricslogger import CsvLogger, now_ms
+from rustencryptor import RustEncryptor
 
 load_dotenv()
 
@@ -42,11 +42,28 @@ CRYPTO_ARM_CAP = os.getenv("CRYPTO_ARM_CAP", "").strip()
 
 
 def build_header(stream_type: int, seq: int, ts_ms: int, nonce: bytes, ct_len: int) -> bytes:
+    try:
+        stream_type_i = int(stream_type)
+        seq_i = int(seq)
+        ts_ms_i = int(ts_ms)
+        ct_len_i = int(ct_len)
+    except Exception as e:
+        raise TypeError(
+            "Header arg conversion failed: "
+            f"stream_type={stream_type!r} ({type(stream_type)}), "
+            f"seq={seq!r} ({type(seq)}), "
+            f"ts_ms={ts_ms!r} ({type(ts_ms)}), "
+            f"ct_len={ct_len!r} ({type(ct_len)})"
+        ) from e
+
+    if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 12:
+        raise TypeError(f"nonce must be 12 bytes, got {type(nonce)} len={len(nonce) if hasattr(nonce, '__len__') else 'n/a'}")
+
     return (
         MAGIC +
-        struct.pack("!BBIQ", stream_type, 0, seq, ts_ms) +
+        struct.pack("!BBIQ", stream_type_i, 0, seq_i, ts_ms_i) +
         nonce +
-        struct.pack("!I", ct_len)
+        struct.pack("!I", ct_len_i)
     )
 
 def build_encryptor_env():
@@ -69,8 +86,8 @@ def build_encryptor_env():
 
     return env
 
-
-def audio_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
+#Encryption threads for Audio/Video
+def audio_thread_fn(sock, encryptor, stop_event, logger):
     pa = pyaudio.PyAudio()
 
     print("=== Sender Input Devices ===")
@@ -98,11 +115,11 @@ def audio_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
     print(f"Audio sender started: chunk={AUDIO_CHUNK}, rate={AUDIO_RATE}, packet every {frame_duration:.4f}s")
 
     try:
-        while True:
+        while not stop_event.is_set():
             loop_start = time.monotonic()
 
             pcm = stream.read(AUDIO_CHUNK, exception_on_overflow=False)
-            ts = metrics_logger.now_ms()
+            ts = now_ms()
 
             tmp_header = build_header(STREAM_AUDIO, seq, ts, b"\x00" * 12, 0)
             aad = tmp_header[:18]
@@ -114,8 +131,8 @@ def audio_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
             pkt = build_header(STREAM_AUDIO, seq, ts, nonce, len(ciphertext)) + ciphertext
             sock.sendto(pkt, (DEST_IP, AUDIO_PORT))
 
-            metrics_logger.log(
-                timestamp_ms=metrics_logger.now_ms(),
+            logger.log(
+                timestamp_ms=now_ms(),
                 stream_type="audio",
                 seq=seq,
                 payload_bytes=len(pcm),
@@ -139,8 +156,7 @@ def audio_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
             pass
         pa.terminate()
 
-
-def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
+def video_thread_fn(sock, encryptor, stop_event, logger):
     picam2 = Picamera2()
     cfg = picam2.create_video_configuration(
         main={"size": (VIDEO_W, VIDEO_H), "format": "RGB888"}
@@ -155,7 +171,7 @@ def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
     print(f"Video sender started: {VIDEO_W}x{VIDEO_H}, jpeg_quality={JPEG_QUALITY}, fps={VIDEO_FPS}")
 
     try:
-        while True:
+        while not stop_event.is_set():
             loop_start = time.monotonic()
 
             frame = picam2.capture_array()
@@ -166,8 +182,8 @@ def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
             jpeg = enc.tobytes()
 
             if len(jpeg) > 60000:
-                metrics_logger.log(
-                    timestamp_ms=metrics_logger.now_ms(),
+                logger.log(
+                    timestamp_ms=now_ms(),
                     stream_type="video",
                     seq=seq,
                     payload_bytes=len(jpeg),
@@ -177,7 +193,7 @@ def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
                 )
                 continue
 
-            ts = metrics_logger.now_ms()
+            ts = now_ms()
 
             tmp_header = build_header(STREAM_VIDEO, seq, ts, b"\x00" * 12, 0)
             aad = tmp_header[:18]
@@ -193,8 +209,8 @@ def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
                 sock.sendto(pkt, (DEST_IP, VIDEO_PORT))
                 send_ok = 1
 
-            metrics_logger.log(
-                timestamp_ms=metrics_logger.now_ms(),
+            logger.log(
+                timestamp_ms=now_ms(),
                 stream_type="video",
                 seq=seq,
                 payload_bytes=len(jpeg),
@@ -216,8 +232,23 @@ def video_thread_fn(sock: socket.socket, encryptor: RustEncryptor):
         except Exception:
             pass
 
-
 def main():
+
+    sender_logger = CsvLogger(
+        "experiments/logs/sender.csv",
+        fieldnames=[
+            "timestamp_ms",
+            "stream_type",
+            "seq",
+            "payload_bytes",
+            "packet_bytes",
+            "encrypt_time_ms",
+            "send_ok",
+        ],
+    )
+
+    stop_event = threading.Event()
+
     sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -231,15 +262,15 @@ def main():
 
     audio_thread = threading.Thread(
         target=audio_thread_fn,
-        args=(sock_audio, enc_audio),
-        daemon=True,
-    )
-    video_thread = threading.Thread(
-        target=video_thread_fn,
-        args=(sock_video, enc_video),
+        args=(sock_audio, enc_audio, stop_event, sender_logger),
         daemon=True,
     )
 
+    video_thread = threading.Thread(
+        target=video_thread_fn,
+        args=(sock_video, enc_video, stop_event, sender_logger),
+        daemon=True,
+    )
     audio_thread.start()
     video_thread.start()
 
@@ -252,6 +283,7 @@ def main():
         enc_audio.close()
         sock_video.close()
         sock_audio.close()
+        sender_logger.close()
 
 
 if __name__ == "__main__":
