@@ -1,0 +1,14 @@
+{
+    "run_name": "hw_crypto_640x480_15fps",
+    "date": "2026-03-20T18:22:00",
+    "sender_host": "rpi5",
+    "receiver_host": "pc",
+    "crypto_mode": "auto",
+    "video_width": 640,
+    "video_height": 480,
+    "video_fps_target": 15,
+    "jpeg_quality": 70,
+    "audio_rate": 44100,
+    "audio_chunk": 1024,
+    "notes": "baseline wifi run"
+}
