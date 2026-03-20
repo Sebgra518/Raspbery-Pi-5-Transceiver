@@ -1,18 +1,21 @@
 use anyhow::{bail, Context, Result};
 use openssl::symm::{Cipher, Crypter, Mode};
-use std::fs;
 use std::io::{self, Read, Write};
 
-
 /*
-Encyrption:
-    // 12-byte GCM nonce:
-    // 1 byte stream type
-    // 3 bytes reserved
-    // 8 bytes monotonically increasing counter
+Encryption:
+    12-byte GCM nonce:
+    1 byte stream type
+    3 bytes reserved
+    8 bytes monotonically increasing counter
 */
 
-fn aes_gcm_encrypt(key: &[u8],nonce: &[u8; 12],aad: &[u8],plaintext: &[u8],) -> Result<Vec<u8>> {
+fn aes_gcm_encrypt(
+    key: &[u8],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
     let cipher = Cipher::aes_256_gcm();
     let mut crypter = Crypter::new(cipher, Mode::Encrypt, key, Some(nonce))
         .context("create crypter")?;
@@ -31,6 +34,7 @@ fn aes_gcm_encrypt(key: &[u8],nonce: &[u8; 12],aad: &[u8],plaintext: &[u8],) -> 
     let mut tag = [0u8; 16];
     crypter.get_tag(&mut tag).context("get_tag failed")?;
     out.extend_from_slice(&tag);
+
     Ok(out)
 }
 
@@ -44,7 +48,8 @@ fn build_nonce(counter: u64, stream_type: u8) -> [u8; 12] {
 fn hex_to_bytes(s: &str) -> Result<Vec<u8>> {
     if s.len() != 64 {
         bail!("Key must be 64 hex chars (32 bytes)");
-    }cargo
+    }
+
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| e.into()))
@@ -52,8 +57,9 @@ fn hex_to_bytes(s: &str) -> Result<Vec<u8>> {
 }
 
 fn main() -> Result<()> {
-    let key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    let key = hex_to_bytes(key_hex)?;
+    let key_hex = std::env::var("STREAM_KEY")
+        .context("STREAM_KEY not set")?;
+    let key = hex_to_bytes(&key_hex)?;
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -64,7 +70,7 @@ fn main() -> Result<()> {
 
     loop {
         let mut stream_buf = [0u8; 1];
-        if let Err(_) = input.read_exact(&mut stream_buf) {
+        if input.read_exact(&mut stream_buf).is_err() {
             break;
         }
         let stream_type = stream_buf[0];
