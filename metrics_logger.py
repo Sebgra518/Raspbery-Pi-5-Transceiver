@@ -3,20 +3,14 @@ import os
 import threading
 import time
 
-import csv
-import os
-import threading
-import time
-
-def now_ms():
-    return int(time.time() * 1000)
-
 class CsvLogger:
     def __init__(self, path, fieldnames):
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.path = path
+        self.fieldnames = fieldnames
+        self.lock = threading.Lock()
         self.file = open(path, "a", newline="")
         self.writer = csv.DictWriter(self.file, fieldnames=fieldnames)
-        self.lock = threading.Lock()
         if self.file.tell() == 0:
             self.writer.writeheader()
             self.file.flush()
