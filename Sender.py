@@ -213,8 +213,8 @@ def main():
 
     encryptor_env = build_encryptor_env()
 
-    enc_video = RustEncryptor("./target/release/udp_av_encryptor")
-    enc_audio = RustEncryptor("./target/release/udp_av_encryptor")
+    enc_video = RustEncryptor("./target/release/udp_av_encryptor", env=encryptor_env)
+    enc_audio = RustEncryptor("./target/release/udp_av_encryptor", env=encryptor_env)
 
     th = threading.Thread(target=audio_thread_fn, args=(sock_audio, enc_audio), daemon=True)
     th.start()
