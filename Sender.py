@@ -7,7 +7,7 @@ from picamera2 import Picamera2
 import pyaudio
 from dotenv import load_dotenv
 import os
-from metricslogger import CsvLogger, now_ms
+from metricslogger import CsvLogger, now_ms, system_metrics_thread
 from rustencryptor import RustEncryptor
 
 load_dotenv()
@@ -247,7 +247,24 @@ def main():
         ],
     )
 
+    sender_system_logger = CsvLogger(
+    "experiments/logs/sender_system.csv",
+    fieldnames=[
+        "timestamp_ms",
+        "cpu_percent",
+        "memory_mb",
+        "threads",
+        ],
+    )
+
     stop_event = threading.Event()
+
+    sys_thread = threading.Thread(
+        target=system_metrics_thread,
+        args=(stop_event, sender_system_logger),
+        daemon=True,
+    )
+    sys_thread.start()
 
     sock_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -279,11 +296,19 @@ def main():
     except KeyboardInterrupt:
         print("Stopping sender...")
     finally:
+        stop_event.set()
+
+        audio_thread.join(timeout=2.0)
+        video_thread.join(timeout=2.0)
+        sys_thread.join(timeout=2.0)
+
         enc_video.close()
         enc_audio.close()
         sock_video.close()
         sock_audio.close()
+
         sender_logger.close()
+        sender_system_logger.close()
 
 
 if __name__ == "__main__":
