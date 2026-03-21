@@ -21,4 +21,4 @@ Cargo.lock
 
 # Log Files
 
-*.csv
+experiments/logs/

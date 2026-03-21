@@ -7,7 +7,7 @@ from picamera2 import Picamera2
 import pyaudio
 from dotenv import load_dotenv
 import os
-from metricslogger import CsvLogger, now_ms, system_metrics_thread
+from metricslogger import CsvLogger, now_ms, system_metrics_thread, write_run_manifest
 from rustencryptor import RustEncryptor
 
 load_dotenv()
@@ -74,8 +74,8 @@ def build_encryptor_env():
             env.pop("OPENSSL_armcap", None)
             print("Crypto mode: auto (OpenSSL runtime detection)")
         case "off":
-            env["OPENSSL_armcap"] = "0"
-            print("Crypto mode: off (OPENSSL_armcap=0)")
+            env["OPENSSL_armcap"] = "1"
+            print("Crypto mode: off (OPENSSL_armcap=1)")
         case "custom":
             if not CRYPTO_ARM_CAP:
                 raise ValueError("CRYPTO_MODE=custom requires CRYPTO_ARM_CAP")
@@ -233,6 +233,8 @@ def video_thread_fn(sock, encryptor, stop_event, logger):
             pass
 
 def main():
+
+    write_run_manifest("experiments/logs/run_manifest.json")
 
     sender_logger = CsvLogger(
         "experiments/logs/sender.csv",
