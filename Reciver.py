@@ -12,6 +12,8 @@ from Cryptodome.Cipher import AES
 from dotenv import load_dotenv
 import os
 
+from metricslogger import CsvLogger, now_ms, system_metrics_thread
+
 load_dotenv()
 
 BIND_IP = "0.0.0.0"
@@ -26,12 +28,12 @@ STREAM_AUDIO = 1
 AUDIO_RATE = int(os.getenv("AUDIO_RATE", 44100))
 AUDIO_CH = int(os.getenv("AUDIO_CHANNELS", 1))
 AUDIO_SAMPLES_PER_PACKET = int(os.getenv("AUDIO_CHUNK", 1024))
-AUDIO_BYTES_PER_SAMPLE = 2  # int16 mono
+AUDIO_BYTES_PER_SAMPLE = 2
 AUDIO_PACKET_BYTES = AUDIO_SAMPLES_PER_PACKET * AUDIO_BYTES_PER_SAMPLE
 
 AUDIO_QUEUE_PACKETS = 100
 AUDIO_PREFILL_PACKETS = 20
-AUDIO_OUTPUT_DEVICE_INDEX = None  # set to an integer if you want a specific device
+AUDIO_OUTPUT_DEVICE_INDEX = None
 
 KEY = bytes.fromhex(os.getenv("STREAM_KEY"))
 
@@ -72,7 +74,7 @@ def make_silence_packet() -> bytes:
     return b"\x00" * AUDIO_PACKET_BYTES
 
 
-def audio_receiver():
+def audio_receiver(stop_event: threading.Event, logger: CsvLogger):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
     sock.bind((BIND_IP, AUDIO_PORT))
@@ -110,21 +112,24 @@ def audio_receiver():
         "underruns": 0,
         "bad_size": 0,
     }
-
     stats_lock = threading.Lock()
     start_time = time.time()
 
     last_seq = None
+    last_latency_ms = None
 
     def net_thread():
-        nonlocal last_seq
+        nonlocal last_seq, last_latency_ms
 
-        while True:
+        while not stop_event.is_set():
             try:
                 data, _ = sock.recvfrom(65535)
             except Exception as e:
-                print(f"audio socket recv error: {e}")
+                if not stop_event.is_set():
+                    print(f"audio socket recv error: {e}")
                 continue
+
+            recv_ts = now_ms()
 
             pkt = parse_packet(data)
             if not pkt:
@@ -137,11 +142,17 @@ def audio_receiver():
             with stats_lock:
                 stats["recv"] += 1
 
+            decrypt_start = time.perf_counter()
             try:
                 pcm = decrypt_packet(nonce, ciphertext, aad)
+                decrypt_time_ms = (time.perf_counter() - decrypt_start) * 1000.0
             except Exception as e:
                 print(f"audio decrypt/auth failed: {e}")
                 continue
+
+            latency_ms = recv_ts - ts_ms
+            jitter_ms = 0 if last_latency_ms is None else abs(latency_ms - last_latency_ms)
+            last_latency_ms = latency_ms
 
             if len(pcm) != AUDIO_PACKET_BYTES:
                 with stats_lock:
@@ -161,7 +172,6 @@ def audio_receiver():
                     print(f"audio packet loss/jump: {last_seq} -> {seq} (missing {missing})")
             last_seq = seq
 
-            # Insert silence for missing packets to preserve timing
             for _ in range(missing):
                 silence = make_silence_packet()
                 if audio_q.full():
@@ -193,10 +203,25 @@ def audio_receiver():
                 with stats_lock:
                     stats["dropped_queue_full"] += 1
 
+            logger.log(
+                timestamp_ms=recv_ts,
+                stream_type="audio",
+                seq=seq,
+                packet_bytes=len(data),
+                decrypt_time_ms=decrypt_time_ms,
+                latency_ms=latency_ms,
+                jitter_ms=jitter_ms,
+                packet_lost=missing,
+                underrun=0,
+                queue_size=audio_q.qsize(),
+                decode_ok=1,
+                play_ok=1,
+            )
+
     def play_thread():
         started = False
 
-        while True:
+        while not stop_event.is_set():
             if not started:
                 qsize = audio_q.qsize()
                 if qsize < AUDIO_PREFILL_PACKETS:
@@ -213,14 +238,30 @@ def audio_receiver():
                     stats["underruns"] += 1
                 print("audio underrun")
 
+                logger.log(
+                    timestamp_ms=now_ms(),
+                    stream_type="audio",
+                    seq=-1,
+                    packet_bytes=0,
+                    decrypt_time_ms=0.0,
+                    latency_ms=0,
+                    jitter_ms=0,
+                    packet_lost=0,
+                    underrun=1,
+                    queue_size=audio_q.qsize(),
+                    decode_ok=1,
+                    play_ok=0,
+                )
+
             try:
                 stream.write(pcm)
             except Exception as e:
-                print(f"audio playback error: {e}")
+                if not stop_event.is_set():
+                    print(f"audio playback error: {e}")
                 time.sleep(0.01)
 
     def stats_thread():
-        while True:
+        while not stop_event.is_set():
             time.sleep(2.0)
             with stats_lock:
                 elapsed = max(time.time() - start_time, 0.001)
@@ -239,25 +280,41 @@ def audio_receiver():
     t1 = threading.Thread(target=net_thread, daemon=True)
     t2 = threading.Thread(target=play_thread, daemon=True)
     t3 = threading.Thread(target=stats_thread, daemon=True)
+
     t1.start()
     t2.start()
     t3.start()
 
-    t1.join()
+    try:
+        while not stop_event.is_set():
+            time.sleep(0.2)
+    finally:
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception:
+            pass
+        pa.terminate()
+        sock.close()
 
 
-def video_receiver():
+def video_receiver(stop_event: threading.Event, logger: CsvLogger):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
     sock.bind((BIND_IP, VIDEO_PORT))
-    last_seq = None
 
-    while True:
+    last_seq = None
+    last_latency_ms = None
+
+    while not stop_event.is_set():
         try:
             data, _ = sock.recvfrom(65535)
         except Exception as e:
-            print(f"video socket recv error: {e}")
+            if not stop_event.is_set():
+                print(f"video socket recv error: {e}")
             continue
+
+        recv_ts = now_ms()
 
         pkt = parse_packet(data)
         if not pkt:
@@ -267,32 +324,120 @@ def video_receiver():
         if stream_type != STREAM_VIDEO:
             continue
 
+        decrypt_start = time.perf_counter()
         try:
             jpeg = decrypt_packet(nonce, ciphertext, aad)
+            decrypt_time_ms = (time.perf_counter() - decrypt_start) * 1000.0
         except Exception as e:
             print(f"video decrypt/auth failed: {e}")
             continue
 
+        latency_ms = recv_ts - ts_ms
+        jitter_ms = 0 if last_latency_ms is None else abs(latency_ms - last_latency_ms)
+        last_latency_ms = latency_ms
+
+        packet_lost = 0
+        if last_seq is not None:
+            delta = (seq - last_seq) & 0xFFFFFFFF
+            if delta > 1:
+                packet_lost = delta - 1
+                print(f"video packet loss/jump: {last_seq} -> {seq}")
+        last_seq = seq
+
         arr = np.frombuffer(jpeg, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        decode_ok = 1 if frame is not None else 0
+
+        logger.log(
+            timestamp_ms=recv_ts,
+            stream_type="video",
+            seq=seq,
+            packet_bytes=len(data),
+            decrypt_time_ms=decrypt_time_ms,
+            latency_ms=latency_ms,
+            jitter_ms=jitter_ms,
+            packet_lost=packet_lost,
+            underrun=0,
+            queue_size=0,
+            decode_ok=decode_ok,
+            play_ok=decode_ok,
+        )
+
         if frame is None:
             continue
 
-        if last_seq is not None and ((seq - last_seq) & 0xFFFFFFFF) != 1:
-            print(f"video packet loss/jump: {last_seq} -> {seq}")
-        last_seq = seq
-
         cv2.imshow("Video", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
+            stop_event.set()
             break
+
+    sock.close()
 
 
 def main():
-    vt = threading.Thread(target=video_receiver, daemon=True)
-    at = threading.Thread(target=audio_receiver, daemon=True)
+    stop_event = threading.Event()
+
+    receiver_logger = CsvLogger(
+        "experiments/logs/receiver.csv",
+        fieldnames=[
+            "timestamp_ms",
+            "stream_type",
+            "seq",
+            "packet_bytes",
+            "decrypt_time_ms",
+            "latency_ms",
+            "jitter_ms",
+            "packet_lost",
+            "underrun",
+            "queue_size",
+            "decode_ok",
+            "play_ok",
+        ],
+    )
+
+    receiver_system_logger = CsvLogger(
+        "experiments/logs/receiver_system.csv",
+        fieldnames=[
+            "timestamp_ms",
+            "cpu_percent",
+            "memory_mb",
+            "threads",
+        ],
+    )
+
+    sys_thread = threading.Thread(
+        target=system_metrics_thread,
+        args=(stop_event, receiver_system_logger),
+        daemon=True,
+    )
+    vt = threading.Thread(
+        target=video_receiver,
+        args=(stop_event, receiver_logger),
+        daemon=True,
+    )
+    at = threading.Thread(
+        target=audio_receiver,
+        args=(stop_event, receiver_logger),
+        daemon=True,
+    )
+
+    sys_thread.start()
     vt.start()
     at.start()
-    vt.join()
+
+    try:
+        while not stop_event.is_set():
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("Stopping receiver...")
+        stop_event.set()
+    finally:
+        vt.join(timeout=2.0)
+        at.join(timeout=2.0)
+        sys_thread.join(timeout=2.0)
+        receiver_logger.close()
+        receiver_system_logger.close()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
