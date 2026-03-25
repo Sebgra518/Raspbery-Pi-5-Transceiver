@@ -12,7 +12,7 @@ from Cryptodome.Cipher import AES
 from dotenv import load_dotenv
 import os
 
-from metricslogger import CsvLogger, now_ms, system_metrics_thread
+from metricslogger import CsvLogger, now_ms, system_metrics_thread, write_run_manifest
 
 load_dotenv()
 
@@ -373,9 +373,10 @@ def video_receiver(stop_event: threading.Event, logger: CsvLogger):
 
     sock.close()
 
-
 def main():
     stop_event = threading.Event()
+
+    write_run_manifest("experiments/logs/run_manifest.json")
 
     receiver_logger = CsvLogger(
         "experiments/logs/receiver.csv",

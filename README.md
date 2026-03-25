@@ -1,84 +1,153 @@
-# Raspberry Pi 5 Transceiver
+# Real-Time Encrypted Audio/Video Streaming (Raspberry Pi 5)
 
-Secure, bidirectional **video + audio streaming** over a LAN, built on a Raspberry Pi 5 with **Python control logic** and **Rust-based encryption** that leverages the Pi 5’s hardware crypto engine.  
+A real-time UDP-based audio/video streaming system with AES-256-GCM encryption, implemented using Python and Rust and optimized with ARMv8 hardware cryptographic acceleration. This project evaluates real-time encrypted audio/video streaming on a Raspberry Pi 5, leveraging ARMv8 cryptographic extensions.
+
+## Tech Stack
+
+- Python (streaming + orchestration)
+- Rust (AES-GCM encryption via OpenSSL)
+- Raspberry Pi 5 (ARM Cortex-A76)
+- OpenCV + Picamera2
+- PyAudio
+- Linux `perf` (CPU profiling)
+
+### Code Abstraction
+
+![alt text](images/abstraction.png)
+
+## Key Results
+
+- Up to **~4× improvement in video encryption throughput**
+- ~30% improvement in audio encryption throughput
+- ~5% reduction in CPU cycles and improved CPI using ARMv8 crypto extensions
+- Full system evaluation: latency, jitter, packet loss, and CPU performance
+
+### Experimental Setup
+
+- **Sender:** Raspberry Pi 5 (ARM Cortex-A76, ARMv8 Crypto Extensions)
+- **Receiver:** x86 system
+- **Transport:** UDP
+- **Video:** 640x480 JPEG, 15 FPS
+- **Audio:** 44.1 kHz PCM
+- **Crypto:** AES-256-GCM (OpenSSL via Rust)
+- **Modes Tested:**
+  - Hardware acceleration enabled (`CRYPTO_MODE=auto`)
+  - Hardware acceleration disabled (`CRYPTO_MODE=off`)
 
 ---
 
-## Features
-- **Bidirectional live streaming** of video (Pi Camera Module 2) and audio (USB microphone)  
-- **End-to-end encryption** implemented in Rust for security + performance  
-- Uses the Raspberry Pi 5 **crypto engine** for efficient, low-latency encryption  
-- **Python control logic** for stream orchestration  
-- Configurable **bitrate and resolution** (roadmap: move to `.env` for user control)  
-- LAN-based for private, secure use cases (doorbell cameras, local surveillance, secure comms)  
+### Encryption Time
+
+| CE OFF | CE ON |
+|------|---------------|
+| ![Encryption Histogram](images/CE_OFF.png) | ![Encryption Histogram](images/CE_ON.png) |
+
+### Summary
+
+| Workload | CE ON | CE OFF | Speedup |
+|--------|------|--------|--------|
+| Audio | 24.99 MB/s | 18.69 MB/s | ~1.3× |
+| Video | 209.20 MB/s | 57.36 MB/s | ~3.6× |
+
+### Encryption Throughput
+
+| Metric | Audio (CE ON) | Audio (CE OFF) | Video (CE ON) | Video (CE OFF) |
+|------|---------------|---------------|--------------|--------------|
+| Mean (MB/s) | 24.99 | 18.69 | 209.20 | 57.36 |
+| Median (MB/s) | 21.99 | 16.83 | 199.38 | 53.75 |
+| P95 (MB/s) | 45.69 | 34.02 | 334.39 | 84.35 |
+
+**Key Observations:**
+
+- Audio throughput improved by ~1.3× with hardware crypto
+- Video throughput improved by ~3.5–4×
+- Larger payloads benefit significantly more from hardware acceleration
 
 ---
 
-## Hardware
-- Raspberry Pi 5 (16 GB)  
-- Pi Camera Module 2  
-- USB Microphone  
-- Local Wi-Fi network  
+### CPU Performance (perf)
+
+| Metric | CE ON | CE OFF | Improvement |
+|------|------|--------|------------|
+| Cycles | 8.12B | 8.50B | ↓ ~4.5% |
+| Instructions | ~11.86B | ~11.84B | ~same |
+| CPI | 0.684 | 0.718 | ↓ ~5% |
+
+**Insights:**
+
+- Instruction count remains constant → same algorithm
+- Cycle count decreases → faster execution per instruction
+- Improved CPI confirms more efficient CPU utilization
 
 ---
 
-## Software Stack
-- **Python**: Orchestration, device control, streaming pipeline  
-- **Rust**: Encryption logic (no garbage collection → lower latency, predictable performance)  
-- **Dependencies**:  
-  - Python: `opencv-python`, `pyaudio`, `requests`, `python-dotenv`  
-  - Rust: `tokio`, `aes-gcm` (or whichever crypto crates you used), `serde`  
+### System-Level Observations
+
+- Encryption throughput improved up to **4×**, but total CPU reduction was ~5%
+- This indicates that encryption is only part of the pipeline
+- Other bottlenecks include:
+  - Image capture
+  - JPEG encoding
+  - Network transmission
 
 ---
 
-## Getting Started
+### Receiver Performance
 
-### 1. Clone repo
+Receiver analysis focused on:
+
+- End-to-end latency
+- Jitter
+- Packet loss
+- Audio underruns
+
+Crypto acceleration had minimal impact on receiver CPU performance, indicating that decryption is not the dominant workload.
+
+---
+
+### Summary
+
+- ARMv8 crypto extensions significantly improve encryption throughput
+- Performance gains scale with payload size
+- Hardware acceleration reduces cycles-per-byte and improves CPI
+- End-to-end performance is bounded by non-crypto pipeline stages
+
+---
+
+## Running the System
+
+### 1. Install dependencies
+
+On Raspberry Pi 5:
+
 ```bash
-git clone https://github.com/Sebgra518/Raspbery-Pi-5-Transceiver.git
-cd Raspbery-Pi-5-Transceiver
-```
-
-### 2. Install Python dependencies
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 3. Install Rust dependencies
-```bash
-cd rust-encryption
+pip install -r requirements.sender.txt
 cargo build --release
 ```
 
-### 4. Run the transceiver
+On PC:
 
-On both Pis (or two terminals):
 ```bash
-python3 Sender.py
-python3 Receiver.py
+pip install -r requirements.receiver.txt
+cargo build --release
 ```
 
----
+### 2. Configure environment
 
-### System Diagram
 ```bash
-[Camera + Mic] --(Python Capture)--> [Rust Encryption] --LAN--> [Rust Decryption] --(Python Playback)--> [Screen + Speaker]
+cp .env.example .env
 ```
 
--Video captured from Pi Camera Module 2
--Audio captured from USB microphone
--Encrypted in Rust using Pi 5’s hardware crypto engine
--Transmitted over LAN
--Received, decrypted, and rendered live
+### 3. Run Sender/Receiver
 
-## Performance Analysis
-For details on performance, including CPI and power consumption benchmarks (crypto engine vs software-only), see the [full report](docs/performance-analysis.pdf).
+On Raspberry Pi 5:
 
-### Encryption Time Comparison
-**Without Crypto Engine**
-![Encryption time without crypto engine](docs/encryptiontime-ce-off.jpg)
+```bash
+python3 ./Sender
+```
 
-**With Crypto Engine**
-![Encryption time with crypto engine](docs/encryptiontime-ce-on.jpg)
+PC:
+
+```bash
+python3 ./Reciver
+```
