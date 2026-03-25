@@ -15,6 +15,10 @@ A real-time UDP-based audio/video streaming system with AES-256-GCM encryption, 
 
 ![alt text](images/abstraction.png)
 
+## Demo
+
+[![Watch the demo](https://img.youtube.com/vi/i9FQLvJkTHk/0.jpg)](https://www.youtube.com/watch?v=i9FQLvJkTHk)
+
 ## Key Results
 
 - Up to **~4× improvement in video encryption throughput**
