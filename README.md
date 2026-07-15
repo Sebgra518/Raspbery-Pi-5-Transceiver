@@ -153,5 +153,5 @@ python3 ./Sender
 PC:
 
 ```bash
-python3 ./Reciver
+python3 ./Receiver
 ```
